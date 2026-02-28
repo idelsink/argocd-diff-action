@@ -1,6 +1,9 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 
+const DIFF_TRUNCATE_LENGTH = 30000;
+const DIFF_RESOURCE_SEPARATOR = /(?====== )/g;
+
 import { type AppTargetRevision } from './argocd/AppTargetRevision.js';
 import { ArgoCDServer } from './argocd/ArgoCDServer.js';
 import { type Diff } from './Diff.js';
@@ -59,7 +62,13 @@ async function postDiffComment(diffs: Diff[], actionInput: ActionInput): Promise
     const shortCommitSha = String(sha).substring(0, 7);
 
     const diffOutput = diffs.map(
-        ({ app, diff, error }) => `
+        ({ app, diff, error }) => {
+        const totalResources = diff ? diff.split(DIFF_RESOURCE_SEPARATOR).filter(Boolean).length : 0;
+        const truncated = diff && diff.length > DIFF_TRUNCATE_LENGTH;
+        const diffContent = truncated ? diff.slice(0, DIFF_TRUNCATE_LENGTH) : diff;
+        const truncatedResources = truncated ? diffContent.split(DIFF_RESOURCE_SEPARATOR).filter(Boolean).length : totalResources;
+
+        return `
 App: [\`${app.metadata.name}\`](${actionInput.argocd.uri}/applications/${app.metadata.name})
 YAML generation: ${error ? ' Error 🛑' : 'Success 🟢'}
 App sync status: ${app.status.sync.status === 'Synced' ? 'Synced ✅' : 'Out of Sync ⚠️ '}
@@ -85,15 +94,17 @@ ${
 <details>
 
 \`\`\`diff
-${diff}
+${diffContent}
 \`\`\`
 
 </details>
+${truncated ? `\n> ⚠️ Diff truncated (${truncatedResources}/${totalResources} resources shown). View the full diff locally:\n> \`argocd app diff ${app.metadata.name} --local-repo-root=. --local=${app.spec.source?.path}\`` : ''}
 `
         : ''
 }
 ---
-`,
+`;
+        },
     );
 
     // Use a unique value at the beginning of each comment so we can find the correct comment for the argocd server FQDN

@@ -34551,6 +34551,8 @@ function getActionInput() {
 ;// CONCATENATED MODULE: ./src/main.ts
 
 
+const DIFF_TRUNCATE_LENGTH = 30000;
+const DIFF_RESOURCE_SEPARATOR = /(?====== )/g;
 
 
 
@@ -34591,12 +34593,17 @@ async function postDiffComment(diffs, actionInput) {
     const sha = github.context.payload.pull_request?.head?.sha;
     const commitLink = `https://github.com/${owner}/${repo}/pull/${github.context.issue.number}/commits/${sha}`;
     const shortCommitSha = String(sha).substring(0, 7);
-    const diffOutput = diffs.map(({ app, diff, error }) => `
+    const diffOutput = diffs.map(({ app, diff, error }) => {
+        const totalResources = diff ? diff.split(DIFF_RESOURCE_SEPARATOR).filter(Boolean).length : 0;
+        const truncated = diff && diff.length > DIFF_TRUNCATE_LENGTH;
+        const diffContent = truncated ? diff.slice(0, DIFF_TRUNCATE_LENGTH) : diff;
+        const truncatedResources = truncated ? diffContent.split(DIFF_RESOURCE_SEPARATOR).filter(Boolean).length : totalResources;
+        return `
 App: [\`${app.metadata.name}\`](${actionInput.argocd.uri}/applications/${app.metadata.name})
 YAML generation: ${error ? ' Error 🛑' : 'Success 🟢'}
 App sync status: ${app.status.sync.status === 'Synced' ? 'Synced ✅' : 'Out of Sync ⚠️ '}
 ${error
-        ? `
+            ? `
 **\`stderr:\`**
 \`\`\`
 ${error.stderr}
@@ -34607,21 +34614,23 @@ ${error.stderr}
 ${JSON.stringify(error.err)}
 \`\`\`
 `
-        : ''}
+            : ''}
 
 ${diff
-        ? `
+            ? `
 <details>
 
 \`\`\`diff
-${diff}
+${diffContent}
 \`\`\`
 
 </details>
+${truncated ? `\n> ⚠️ Diff truncated (${truncatedResources}/${totalResources} resources shown). View the full diff locally:\n> \`argocd app diff ${app.metadata.name} --local-repo-root=. --local=${app.spec.source?.path}\`` : ''}
 `
-        : ''}
+            : ''}
 ---
-`);
+`;
+    });
     // Use a unique value at the beginning of each comment so we can find the correct comment for the argocd server FQDN
     const headerPrefix = `<!-- argocd-diff-action ${actionInput.argocd.fqdn} -->`;
     const header = `${headerPrefix}
