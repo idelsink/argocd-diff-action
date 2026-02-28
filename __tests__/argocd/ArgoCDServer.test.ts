@@ -93,6 +93,17 @@ describe('ArgoCDServer tests', function () {
         );
     });
 
+    test('ArgoCDServer passes execMaxBuffer to execCommand', async () => {
+        mockedExecCommand.mockReturnValueOnce(Promise.resolve({ stdout: 'diff output', stderr: '' }));
+
+        await argocdServer({ execMaxBuffer: 52428800 }).getAppDiff(appOne());
+
+        expect(mockedExecCommand).toHaveBeenCalledWith(
+            expect.any(String),
+            { maxBuffer: 52428800 },
+        );
+    });
+
     test('ArgoCDServer getAppDiff returns an error', async () => {
         mockedExecCommand.mockReturnValueOnce(Promise.reject(exceCommandAppLocalDiffError()));
         const appDiff: Diff = {
@@ -140,6 +151,7 @@ describe('ArgoCDServer tests', function () {
             `bin/argo app diff --local-repo-root=${process.cwd()} ${appOne().metadata.name} --local=${
                 appOne().spec.source?.path
             } --exit-code=false --auth-token=fakeArgoCdToken --server=argocd.example --header "Authorization: Bearer super-secret-bearer-token" --header "X-Example-Header: Some custom value"`,
+            { maxBuffer: 10485760 },
         );
     });
 
@@ -159,6 +171,7 @@ describe('ArgoCDServer tests', function () {
             `bin/argo app diff --local-repo-root=${process.cwd()} ${
                 appThree().metadata.name
             } --revision=1.2.2 --exit-code=false --auth-token=fakeArgoCdToken --server=argocd.example --header "Authorization: Bearer super-secret-bearer-token" --header "X-Example-Header: Some custom value"`,
+            { maxBuffer: 10485760 },
         );
     });
 });
@@ -234,6 +247,7 @@ function appCollection(): AppCollection {
 }
 
 function argocdServer(overrides?: {
+    execMaxBuffer?: number;
     fqdn?: string;
     protocol?: 'http' | 'https';
     uri?: string;
@@ -249,6 +263,7 @@ function argocdServer(overrides?: {
                 'Authorization': 'Bearer super-secret-bearer-token',
                 'X-Example-Header': 'Some custom value',
             })),
+            execMaxBuffer: 10485760,
             protocol: 'https',
             token: 'fakeArgoCdToken',
             uri: 'https://argocd.example',

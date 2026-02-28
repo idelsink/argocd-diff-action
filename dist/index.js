@@ -34347,6 +34347,7 @@ class ArgoCDServer {
     extraCommandArgs;
     fqdn;
     headers;
+    execMaxBuffer;
     protocol;
     token;
     uri;
@@ -34354,6 +34355,7 @@ class ArgoCDServer {
         this.extraCommandArgs = actionInput.argocd.extraCliArgs;
         this.fqdn = actionInput.argocd.fqdn;
         this.headers = actionInput.argocd.headers;
+        this.execMaxBuffer = actionInput.argocd.execMaxBuffer;
         this.protocol = actionInput.argocd.protocol;
         this.token = actionInput.argocd.token;
         this.uri = actionInput.argocd.uri;
@@ -34374,7 +34376,7 @@ class ArgoCDServer {
             cmd += ` --header "${header}: ${value}"`;
         }
         core.debug(`Running: ${scrubSecrets(cmd, this.headers)}`);
-        return execCommand(cmd);
+        return execCommand(cmd, { maxBuffer: this.execMaxBuffer });
     }
     async getAppLocalDiff(app) {
         if (app.spec.source?.path === undefined) {
@@ -34533,6 +34535,7 @@ function getActionInput() {
             extraCliArgs,
             fqdn,
             headers: parseHeaders(core.getInput('argocd-headers')),
+            execMaxBuffer: Number(core.getInput('argocd-exec-max-buffer')),
             protocol,
             targetRevisions: core.getInput('target-revisions')
                 .split(',')

@@ -9,6 +9,7 @@ export interface ActionInput {
         extraCliArgs: string;
         fqdn: string;
         headers: Map<string, string>;
+        execMaxBuffer: number;
         protocol: string;
         targetRevisions: string[];
         token: string;
@@ -62,6 +63,7 @@ export default function getActionInput(): ActionInput {
             extraCliArgs,
             fqdn,
             headers: parseHeaders(core.getInput('argocd-headers')),
+            execMaxBuffer: Number(core.getInput('argocd-exec-max-buffer')),
             protocol,
             targetRevisions: core.getInput('target-revisions')
                 .split(',')
