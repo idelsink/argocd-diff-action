@@ -34233,12 +34233,35 @@ module.exports = parseParams
 /******/ }
 /******/ 
 /************************************************************************/
+/******/ /* webpack/runtime/define property getters */
+/******/ (() => {
+/******/ 	// define getter functions for harmony exports
+/******/ 	__nccwpck_require__.d = (exports, definition) => {
+/******/ 		for(var key in definition) {
+/******/ 			if(__nccwpck_require__.o(definition, key) && !__nccwpck_require__.o(exports, key)) {
+/******/ 				Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 			}
+/******/ 		}
+/******/ 	};
+/******/ })();
+/******/ 
+/******/ /* webpack/runtime/hasOwnProperty shorthand */
+/******/ (() => {
+/******/ 	__nccwpck_require__.o = (obj, prop) => (Object.prototype.hasOwnProperty.call(obj, prop))
+/******/ })();
+/******/ 
 /******/ /* webpack/runtime/compat */
 /******/ 
 /******/ if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = new URL('.', import.meta.url).pathname.slice(import.meta.url.match(/^file:\/\/\/\w:/) ? 1 : 0, -1) + "/";
 /******/ 
 /************************************************************************/
 var __webpack_exports__ = {};
+
+// EXPORTS
+__nccwpck_require__.d(__webpack_exports__, {
+  _: () => (/* binding */ GITHUB_COMMENT_LIMIT),
+  Y: () => (/* binding */ buildCommentBodies)
+});
 
 // EXTERNAL MODULE: ./node_modules/.pnpm/@actions+core@1.11.1/node_modules/@actions/core/lib/core.js
 var core = __nccwpck_require__(9999);
@@ -34551,7 +34574,7 @@ function getActionInput() {
 ;// CONCATENATED MODULE: ./src/main.ts
 
 
-const DIFF_TRUNCATE_LENGTH = 30000;
+const GITHUB_COMMENT_LIMIT = 65536;
 const DIFF_RESOURCE_SEPARATOR = /(?====== )/g;
 
 
@@ -34593,16 +34616,43 @@ async function postDiffComment(diffs, actionInput) {
     const sha = github.context.payload.pull_request?.head?.sha;
     const commitLink = `https://github.com/${owner}/${repo}/pull/${github.context.issue.number}/commits/${sha}`;
     const shortCommitSha = String(sha).substring(0, 7);
-    const diffOutput = diffs.map(({ app, diff, error }) => {
-        const totalResources = diff ? diff.split(DIFF_RESOURCE_SEPARATOR).filter(Boolean).length : 0;
-        const truncated = diff && diff.length > DIFF_TRUNCATE_LENGTH;
-        const diffContent = truncated ? diff.slice(0, DIFF_TRUNCATE_LENGTH) : diff;
-        const truncatedResources = truncated ? diffContent.split(DIFF_RESOURCE_SEPARATOR).filter(Boolean).length : totalResources;
-        return `
-App: [\`${app.metadata.name}\`](${actionInput.argocd.uri}/applications/${app.metadata.name})
+    const legend = `
+| Legend | Status |
+| :---:  | :---   |
+| ✅     | The app is synced in ArgoCD, and diffs you see are solely from this PR. |
+| ⚠️      | The app is out-of-sync in ArgoCD, and the diffs you see include those changes plus any from this PR. |
+| 🛑     | There was an error generating the ArgoCD diffs due to changes in this PR. |
+`;
+    const header = `## ArgoCD Diff ${actionInput.argocd.fqdn} for commit [\`${shortCommitSha}\`](${commitLink})
+
+_Updated at ${new Date().toLocaleString('en-CA', { timeZone: actionInput.timezone })} PT_
+`;
+    const commentBodies = buildCommentBodies(diffs, header, legend, actionInput.argocd.uri);
+    const numberedBodies = commentBodies.length > 1
+        ? commentBodies.map((body, i) => body.replace(header, `${header}_${i + 1}/${commentBodies.length}_\n`))
+        : commentBodies;
+    const scrubbedBodies = numberedBodies.map(body => scrubSecrets(body, actionInput.argocd.headers));
+    if (scrubbedBodies.length === 0) {
+        return;
+    }
+    for (const body of scrubbedBodies) {
+        await octokit.rest.issues.createComment({
+            issue_number: github.context.issue.number,
+            owner,
+            repo,
+            body,
+        });
+    }
+}
+function buildCommentBodies(diffs, header, legend, argocdUri) {
+    const wrapInDetails = (content) => `\n<details>\n\n\`\`\`diff\n${content}\n\`\`\`\n\n</details>\n`;
+    // Build each app's rendered block, truncating the diff if it alone exceeds the limit
+    const appBlocks = diffs.map(({ app, diff, error }) => {
+        const appHeader = `App: [\`${app.metadata.name}\`](${argocdUri}/applications/${app.metadata.name})
 YAML generation: ${error ? ' Error 🛑' : 'Success 🟢'}
 App sync status: ${app.status.sync.status === 'Synced' ? 'Synced ✅' : 'Out of Sync ⚠️ '}
-${error
+`;
+        const errorBlock = error
             ? `
 **\`stderr:\`**
 \`\`\`
@@ -34614,62 +34664,50 @@ ${error.stderr}
 ${JSON.stringify(error.err)}
 \`\`\`
 `
-            : ''}
-
-${diff
-            ? `
-<details>
-
-\`\`\`diff
-${diffContent}
-\`\`\`
-
-</details>
-${truncated ? `\n> ⚠️ Diff truncated (${truncatedResources}/${totalResources} resources shown). View the full diff locally:\n> \`argocd app diff ${app.metadata.name} --local-repo-root=. --local=${app.spec.source?.path}\`` : ''}
-`
-            : ''}
----
-`;
+            : '';
+        if (!diff) {
+            return `${appHeader}${errorBlock}\n---\n`;
+        }
+        const totalResources = diff.split(DIFF_RESOURCE_SEPARATOR).filter(Boolean).length;
+        const truncationNotice = (shown) => `\n> ⚠️ Diff truncated (showing ${shown}/${totalResources} resources). Run locally to see the full diff:\n> \`argocd app diff ${app.metadata.name} --local-repo-root=. --local=${app.spec.source?.path}\`\n`;
+        const baseBlock = `${appHeader}${errorBlock}${wrapInDetails(diff)}\n---\n`;
+        if ((header + baseBlock + legend).length <= GITHUB_COMMENT_LIMIT) {
+            return baseBlock;
+        }
+        // Truncate: fit as many whole resources as possible within the limit
+        const resources = diff.split(DIFF_RESOURCE_SEPARATOR).filter(Boolean);
+        let truncatedDiff = '';
+        let shownResources = 0;
+        for (const resource of resources) {
+            const candidate = truncatedDiff + resource;
+            const candidateBlock = `${appHeader}${errorBlock}${wrapInDetails(candidate)}${truncationNotice(shownResources + 1)}\n---\n`;
+            if ((header + candidateBlock + legend).length > GITHUB_COMMENT_LIMIT) {
+                break;
+            }
+            truncatedDiff = candidate;
+            shownResources++;
+        }
+        return `${appHeader}${errorBlock}${wrapInDetails(truncatedDiff)}${truncationNotice(shownResources)}\n---\n`;
     });
-    // Use a unique value at the beginning of each comment so we can find the correct comment for the argocd server FQDN
-    const headerPrefix = `<!-- argocd-diff-action ${actionInput.argocd.fqdn} -->`;
-    const header = `${headerPrefix}
-## ArgoCD Diff ${actionInput.argocd.fqdn} for commit [\`${shortCommitSha}\`](${commitLink})
-`;
-    const output = scrubSecrets(`${header}
-_Updated at ${new Date().toLocaleString('en-CA', { timeZone: actionInput.timezone })} PT_
-  ${diffOutput.join('\n')}
-
-| Legend | Status |
-| :---:  | :---   |
-| ✅     | The app is synced in ArgoCD, and diffs you see are solely from this PR. |
-| ⚠️      | The app is out-of-sync in ArgoCD, and the diffs you see include those changes plus any from this PR. |
-| 🛑     | There was an error generating the ArgoCD diffs due to changes in this PR. |
-`, actionInput.argocd.headers);
-    const commentsResponse = await octokit.rest.issues.listComments({
-        issue_number: github.context.issue.number,
-        owner,
-        repo,
-    });
-    const existingComment = commentsResponse.data.find(d => d.body?.includes(headerPrefix) ?? false);
-    // Existing comments should be updated even if there are no changes this round in order to indicate that
-    if (existingComment) {
-        octokit.rest.issues.updateComment({
-            owner,
-            repo,
-            comment_id: existingComment.id,
-            body: output,
-        });
-        // Only post a new comment when there are changes
+    // Pack app blocks into as few comments as possible, splitting when a comment would exceed the limit
+    const commentBodies = [];
+    let currentBody = header;
+    for (const block of appBlocks) {
+        const candidate = currentBody + block;
+        if (candidate.length + legend.length > GITHUB_COMMENT_LIMIT && currentBody !== header) {
+            // Adding this block would overflow — flush current and start a new comment
+            commentBodies.push(currentBody + legend);
+            currentBody = header + block;
+        }
+        else {
+            // Either it fits, or this is the only block in the comment (already truncated above)
+            currentBody = candidate;
+        }
     }
-    else if (diffs.length) {
-        octokit.rest.issues.createComment({
-            issue_number: github.context.issue.number,
-            owner,
-            repo,
-            body: output,
-        });
+    if (currentBody !== header) {
+        commentBodies.push(currentBody + legend);
     }
+    return commentBodies;
 }
 function getAppOfAppTargetRevisions(diffs) {
     const appTargetRevisions = [];
@@ -34695,3 +34733,6 @@ function getAppOfAppTargetRevisions(diffs) {
     return appTargetRevisions;
 }
 
+var __webpack_exports__GITHUB_COMMENT_LIMIT = __webpack_exports__._;
+var __webpack_exports__buildCommentBodies = __webpack_exports__.Y;
+export { __webpack_exports__GITHUB_COMMENT_LIMIT as GITHUB_COMMENT_LIMIT, __webpack_exports__buildCommentBodies as buildCommentBodies };
